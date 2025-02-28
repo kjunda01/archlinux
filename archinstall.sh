@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # Script para instalação e configuração do Arch Linux com partição swap de 4GB
 # Execute este script como root em um ambiente live do Arch Linux
 
@@ -62,16 +61,16 @@ swapon $SWAP_PART
 
 # Configuração dos mirrors (usando apenas mirrors do Brasil)
 echo "Configurando mirrors brasileiros..."
-cat << EOF > /etc/pacman.d/mirrorlist
-Server = http://archlinux.c3sl.ufpr.br/\$repo/os/\$arch
-Server = https://archlinux.c3sl.ufpr.br/\$repo/os/\$arch
-Server = http://br.mirrors.cicku.me/archlinux/\$repo/os/\$arch
-Server = https://br.mirrors.cicku.me/archlinux/\$repo/os/\$arch
-Server = http://mirror.ufam.edu.br/archlinux/\$repo/os/\$arch
-Server = http://mirror.ufscar.br/archlinux/\$repo/os/\$arch
-Server = https://mirror.ufscar.br/archlinux/\$repo/os/\$arch
-Server = http://mirrors.ic.unicamp.br/archlinux/\$repo/os/\$arch
-Server = https://mirrors.ic.unicamp.br/archlinux/\$repo/os/\$arch
+cat > /etc/pacman.d/mirrorlist << 'EOF'
+Server = http://archlinux.c3sl.ufpr.br/$repo/os/$arch
+Server = https://archlinux.c3sl.ufpr.br/$repo/os/$arch
+Server = http://br.mirrors.cicku.me/archlinux/$repo/os/$arch
+Server = https://br.mirrors.cicku.me/archlinux/$repo/os/$arch
+Server = http://mirror.ufam.edu.br/archlinux/$repo/os/$arch
+Server = http://mirror.ufscar.br/archlinux/$repo/os/$arch
+Server = https://mirror.ufscar.br/archlinux/$repo/os/$arch
+Server = http://mirrors.ic.unicamp.br/archlinux/$repo/os/$arch
+Server = https://mirrors.ic.unicamp.br/archlinux/$repo/os/$arch
 EOF
 
 # Instalação do sistema base
@@ -81,7 +80,7 @@ pacstrap /mnt base linux linux-firmware
 genfstab -U /mnt >> /mnt/etc/fstab
 
 # Configuração do sistema instalado via chroot
-arch-chroot /mnt /bin/bash << EOF
+arch-chroot /mnt /bin/bash << 'EOF'
 # Configuração de fuso horário
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 hwclock --systohc
@@ -94,7 +93,7 @@ echo "KEYMAP=$KEYBOARD" > /etc/vconsole.conf
 
 # Configuração do hostname
 echo "$HOSTNAME" > /etc/hostname
-cat << HOSTS > /etc/hosts
+cat > /etc/hosts << 'HOSTS'
 127.0.0.1   localhost
 ::1         localhost
 127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
