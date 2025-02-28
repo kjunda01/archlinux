@@ -50,7 +50,7 @@ umount /mnt
 
 # Montagem das partições
 mount -o compress=zstd,subvol=@ $BTRFS_PART /mnt
-mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots}
+mkdir -p /mnt/boot /mnt/home /mnt/var/log /mnt/var/cache/pacman/pkg /mnt/.snapshots
 mount -o compress=zstd,subvol=@home $BTRFS_PART /mnt/home
 mount -o compress=zstd,subvol=@log $BTRFS_PART /mnt/var/log
 mount -o compress=zstd,subvol=@pkg $BTRFS_PART /mnt/var/cache/pacman/pkg
