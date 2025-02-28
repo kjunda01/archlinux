@@ -46,7 +46,7 @@ mount ${DISK}p1 /mnt/boot
 
 # Instalação base
 echo "Instalando sistema base..."
-pacstrap /mnt base linux linux-firmware nano vim openssh samba wget curl
+pacstrap /mnt base linux linux-firmware nano vim openssh samba wget curl efibootmgr
 
 # Gerando fstab
 genfstab -U /mnt >> /mnt/etc/fstab
