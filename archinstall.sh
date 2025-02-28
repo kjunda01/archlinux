@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script para instalação e configuração do Arch Linux baseado nos JSONs fornecidos
+# Script para instalação e configuração do Arch Linux com partição swap de 4GB
 # Execute este script como root em um ambiente live do Arch Linux
 
 # Verifica se está sendo executado como root
@@ -17,6 +17,7 @@ LANGUAGE="en_US.UTF-8"
 DISK="/dev/nvme0n1"
 BOOT_PART="${DISK}p1"
 BTRFS_PART="${DISK}p2"
+SWAP_PART="${DISK}p3"
 USER="kjunda01"
 USER_PASS="112148"
 ROOT_PASS="112148"
@@ -27,13 +28,15 @@ timedatectl set-ntp true
 # Particionamento do disco
 echo "Particionando o disco $DISK..."
 parted -s $DISK mklabel gpt
-parted -s $DISK mkpart primary fat32 1MiB 1GiB
+parted -s $DISK mkpart primary fat32 1MiB 1GiB # Partição EFI (1 GiB)
 parted -s $DISK set 1 esp on
 parted -s $DISK set 1 boot on
-parted -s $DISK mkpart primary btrfs 1GiB 100%
+parted -s $DISK mkpart primary linux-swap 1GiB 5GiB # Partição swap (4 GiB)
+parted -s $DISK mkpart primary btrfs 5GiB 100% # Partição Btrfs (restante)
 
 # Formatação das partições
 mkfs.fat -F32 $BOOT_PART
+mkswap $SWAP_PART
 mkfs.btrfs -f $BTRFS_PART
 
 # Configuração do Btrfs com subvolumes
@@ -53,6 +56,9 @@ mount -o compress=zstd,subvol=@log $BTRFS_PART /mnt/var/log
 mount -o compress=zstd,subvol=@pkg $BTRFS_PART /mnt/var/cache/pacman/pkg
 mount -o compress=zstd,subvol=@.snapshots $BTRFS_PART /mnt/.snapshots
 mount $BOOT_PART /mnt/boot
+
+# Ativa o swap temporariamente para a instalação
+swapon $SWAP_PART
 
 # Configuração dos mirrors (usando apenas mirrors do Brasil)
 echo "Configurando mirrors brasileiros..."
@@ -98,12 +104,6 @@ HOSTS
 pacman -S --noconfirm grub efibootmgr
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg
-
-# Configuração de swap (simples arquivo de swap)
-fallocate -l 2G /swapfile
-chmod 600 /swapfile
-mkswap /swapfile
-echo "/swapfile none swap sw 0 0" >> /etc/fstab
 
 # Instalação de pacotes adicionais
 pacman -S --noconfirm nano vim openssh samba wget curl pipewire pipewire-pulse hyprland sddm polkit
