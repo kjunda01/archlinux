@@ -99,14 +99,8 @@ pacman -S --noconfirm grub efibootmgr
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg
 
-# Configuração de swap (simples arquivo de swap)
-#fallocate -l 2G /swapfile
-#chmod 600 /swapfile
-#mkswap /swapfile
-#echo "/swapfile none swap sw 0 0" >> /etc/fstab
-
 # Instalação de pacotes adicionais
-pacman -S --noconfirm nano vim openssh samba wget curl pipewire pipewire-pulse hyprland sddm polkit
+pacman -S --noconfirm nano vim openssh samba wget curl pipewire pipewire-pulse hyprland sddm polkit kitty wayland
 
 # Configuração de áudio (PipeWire)
 systemctl enable pipewire pipewire-pulse
