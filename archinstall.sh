@@ -250,6 +250,16 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Instala o Hyprland e seus pacotes
+pacman -S dolphin dunst grim hyprland kitty polkit-kde-agent qt5-wayland qt6-wayland slurp wofi xdg-desktop-portal-hyprland swaync polkit
+
+# Instala os drivers de video
+pacman -S intel-media-driver libva-intel-driver libva-mesa-driver mesa vulkan-intel vulkan-radeon xf86-video-amdgpu xf86-video-ati xf86-video-nouveau xf86-video-vmware xorg-server xorg-xinit
+
+# Instala o SDDM
+pacman -S sddm
+systemctl enable sddm
+
 # Finalização
 echo "Instalação concluída com sucesso!"
 echo "Partições montadas em /mnt. Para desmontar: umount -R /mnt"
