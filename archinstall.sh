@@ -47,7 +47,7 @@ LANGUAGE=${LANGUAGES[$?]}
 
 # Descobrir discos disponíveis
 echo "Detectando discos disponíveis..."
-DISKS=($(lsblk -d -n -o NAME,SIZE | awk '{print "/dev/" $1 " (" $2 ")"}'))
+DISKS=($(lsblk -d -n -o NAME,SIZE | awk '{print "/dev/" $1}'))
 
 if [ ${#DISKS[@]} -eq 0 ]; then
     echo "Nenhum disco detectado. Abortando."
@@ -55,7 +55,7 @@ if [ ${#DISKS[@]} -eq 0 ]; then
 fi
 
 select_option "Escolha o disco para instalar o sistema:" "${DISKS[@]}"
-DISK=$(echo "${DISKS[$?]}" | awk '{print $1}')  # Pega apenas o nome do dispositivo
+DISK=${DISKS[$?]}
 
 # Pergunta sobre o usuário
 read -rp "Digite o nome do usuário [padrão: kjunda01]: " USER
@@ -64,12 +64,31 @@ USER=${USER:-kjunda01}
 # Pergunta sobre as senhas
 echo "Digite a senha do usuário:"
 read -s USER_PASS
+echo "Confirme a senha do usuário:"
+read -s USER_PASS_CONFIRM
+while [ "$USER_PASS" != "$USER_PASS_CONFIRM" ]; do
+    echo "As senhas não coincidem. Tente novamente."
+    echo "Digite a senha do usuário:"
+    read -s USER_PASS
+    echo "Confirme a senha do usuário:"
+    read -s USER_PASS_CONFIRM
+done
+
 echo "Digite a senha do root:"
 read -s ROOT_PASS
+echo "Confirme a senha do root:"
+read -s ROOT_PASS_CONFIRM
+while [ "$ROOT_PASS" != "$ROOT_PASS_CONFIRM" ]; do
+    echo "As senhas não coincidem. Tente novamente."
+    echo "Digite a senha do root:"
+    read -s ROOT_PASS
+    echo "Confirme a senha do root:"
+    read -s ROOT_PASS_CONFIRM
+done
 
 # Partições baseadas no disco escolhido
-BOOT_PART="${DISK}p1"
-BTRFS_PART="${DISK}p2"
+BOOT_PART="${DISK}1"
+BTRFS_PART="${DISK}2"
 
 # Resumo das configurações
 echo -e "\nConfiguração escolhida:"
