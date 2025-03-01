@@ -111,121 +111,100 @@ if [[ "$confirm" != "s" ]]; then
     exit 1
 fi
 
-# Continua com o restante do script...
+# Inicia a instalação
 echo "Iniciando instalação..."
 
 # Atualiza o relógio do sistema
 timedatectl set-ntp true || echo "Aviso: Falha ao sincronizar NTP"
 
-# Particionamento do disco com verificação
+# Particionamento do disco
 echo "Particionando o disco $DISK..."
-if ! parted -s "$DISK" mklabel gpt; then
-    echo "Erro ao criar tabela de partição GPT"
-    exit 1
-fi
-if ! parted -s "$DISK" mkpart primary fat32 1MiB 1GiB; then
-    echo "Erro ao criar partição EFI"
-    exit 1
-fi
-if ! parted -s "$DISK" set 1 esp on; then
-    echo "Erro ao definir flag ESP"
-    exit 1
-fi
-if ! parted -s "$DISK" set 1 boot on; then
-    echo "Erro ao definir flag boot"
-    exit 1
-fi
-if ! parted -s "$DISK" mkpart primary btrfs 1GiB 100%; then
-    echo "Erro ao criar partição Btrfs"
-    exit 1
-fi
+parted -s "$DISK" mklabel gpt || { echo "Erro ao criar tabela GPT"; exit 1; }
+parted -s "$DISK" mkpart primary fat32 1MiB 1GiB || { echo "Erro ao criar partição EFI"; exit 1; }
+parted -s "$DISK" set 1 esp on || { echo "Erro ao definir flag ESP"; exit 1; }
+parted -s "$DISK" set 1 boot on || { echo "Erro ao definir flag boot"; exit 1; }
+parted -s "$DISK" mkpart primary btrfs 1GiB 100% || { echo "Erro ao criar partição Btrfs"; exit 1; }
 
-# Formatação das partições com verificação
+# Formatação das partições
 echo "Formatando partições..."
-if ! mkfs.fat -F32 "$BOOT_PART"; then
-    echo "Erro ao formatar partição EFI"
-    exit 1
-fi
-if ! mkfs.btrfs -f "$BTRFS_PART"; then
-    echo "Erro ao formatar partição Btrfs"
-    exit 1
-fi
+mkfs.fat -F32 "$BOOT_PART" || { echo "Erro ao formatar EFI"; exit 1; }
+mkfs.btrfs -f "$BTRFS_PART" || { echo "Erro ao formatar Btrfs"; exit 1; }
 
 # Configuração do Btrfs com subvolumes
-echo "Montando partição Btrfs temporariamente em /mnt..."
-if ! mount "$BTRFS_PART" /mnt; then
-    echo "Erro ao montar $BTRFS_PART em /mnt"
-    lsblk
-    exit 1
-fi
-
-echo "Criando subvolumes Btrfs..."
+echo "Montando partição Btrfs temporariamente..."
+mount "$BTRFS_PART" /mnt || { echo "Erro ao montar $BTRFS_PART"; exit 1; }
 for subvol in @ @home @log @pkg @.snapshots; do
-    if ! btrfs subvolume create "/mnt/$subvol"; then
-        echo "Erro ao criar subvolume $subvol"
-        umount /mnt
-        exit 1
-    fi
+    btrfs subvolume create "/mnt/$subvol" || { echo "Erro ao criar subvolume $subvol"; umount /mnt; exit 1; }
 done
+umount /mnt || { echo "Erro ao desmontar /mnt"; exit 1; }
 
-echo "Desmontando /mnt..."
-if ! umount /mnt; then
-    echo "Erro ao desmontar /mnt"
-    exit 1
-fi
-
-# Montagem das partições com verificação
+# Montagem das partições
 echo "Montando partições com subvolumes..."
-if ! mount -o compress=zstd,subvol=@ "$BTRFS_PART" /mnt; then
-    echo "Erro ao montar subvolume @ em /mnt"
-    lsblk
-    exit 1
-fi
+mount -o compress=zstd,subvol=@ "$BTRFS_PART" /mnt || { echo "Erro ao montar subvolume @"; exit 1; }
+mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots} || { echo "Erro ao criar diretórios"; umount /mnt; exit 1; }
+mount -o compress=zstd,subvol=@home "$BTRFS_PART" /mnt/home || { echo "Erro ao montar @home"; umount -R /mnt; exit 1; }
+mount -o compress=zstd,subvol=@log "$BTRFS_PART" /mnt/var/log || { echo "Erro ao montar @log"; umount -R /mnt; exit 1; }
+mount -o compress=zstd,subvol=@pkg "$BTRFS_PART" /mnt/var/cache/pacman/pkg || { echo "Erro ao montar @pkg"; umount -R /mnt; exit 1; }
+mount -o compress=zstd,subvol=@.snapshots "$BTRFS_PART" /mnt/.snapshots || { echo "Erro ao montar @.snapshots"; umount -R /mnt; exit 1; }
+mount "$BOOT_PART" /mnt/boot || { echo "Erro ao montar EFI"; umount -R /mnt; exit 1; }
 
-echo "Criando diretórios de montagem..."
-mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots} || {
-    echo "Erro ao criar diretórios em /mnt"
-    umount /mnt
-    exit 1
-}
+# Instalação do sistema base
+echo "Instalando pacotes base..."
+pacstrap /mnt base linux linux-firmware || { echo "Erro ao instalar pacotes base"; umount -R /mnt; exit 1; }
 
-echo "Montando subvolume @home..."
-if ! mount -o compress=zstd,subvol=@home "$BTRFS_PART" /mnt/home; then
-    echo "Erro ao montar subvolume @home"
-    umount -R /mnt
-    exit 1
-fi
+# Geração do fstab
+echo "Gerando fstab..."
+genfstab -U /mnt >> /mnt/etc/fstab || { echo "Erro ao gerar fstab"; umount -R /mnt; exit 1; }
 
-echo "Montando subvolume @log..."
-if ! mount -o compress=zstd,subvol=@log "$BTRFS_PART" /mnt/var/log; then
-    echo "Erro ao montar subvolume @log"
-    umount -R /mnt
-    exit 1
-fi
+# Configuração do sistema via arch-chroot
+echo "Configurando o sistema..."
+arch-chroot /mnt /bin/bash <<EOF
+# Configura o fuso horário
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+hwclock --systohc
 
-echo "Montando subvolume @pkg..."
-if ! mount -o compress=zstd,subvol=@pkg "$BTRFS_PART" /mnt/var/cache/pacman/pkg; then
-    echo "Erro ao montar subvolume @pkg"
-    umount -R /mnt
-    exit 1
-fi
+# Configura o idioma
+echo "$LANGUAGE UTF-8" > /etc/locale.gen
+locale-gen
+echo "LANG=$LANGUAGE" > /etc/locale.conf
 
-echo "Montando subvolume @.snapshots..."
-if ! mount -o compress=zstd,subvol=@.snapshots "$BTRFS_PART" /mnt/.snapshots; then
-    echo "Erro ao montar subvolume @.snapshots"
-    umount -R /mnt
-    exit 1
-fi
+# Configura o teclado
+echo "KEYMAP=$KEYBOARD" > /etc/vconsole.conf
 
-echo "Montando partição EFI..."
-if ! mount "$BOOT_PART" /mnt/boot; then
-    echo "Erro ao montar partição EFI em /mnt/boot"
+# Configura o hostname
+echo "$HOSTNAME" > /etc/hostname
+cat <<HOSTS > /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+HOSTS
+
+# Configura a senha do root
+echo "root:$ROOT_PASS" | chpasswd
+
+# Cria o usuário
+useradd -m -G wheel -s /bin/bash "$USER"
+echo "$USER:$USER_PASS" | chpasswd
+
+# Instala o GRUB e utilitários
+pacman -S --noconfirm grub efibootmgr
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+grub-mkconfig -o /boot/grub/grub.cfg
+
+# Habilita o usuário wheel para sudo (opcional)
+echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
+
+exit
+EOF
+
+# Verifica se o chroot foi bem-sucedido
+if [ $? -ne 0 ]; then
+    echo "Erro durante a configuração no chroot"
     umount -R /mnt
     exit 1
 fi
 
 # Finalização
 echo "Instalação concluída com sucesso!"
-echo "Partições montadas em /mnt. Verifique com 'lsblk' se necessário."
-echo "Para desmontar: umount -R /mnt"
+echo "Partições montadas em /mnt. Para desmontar: umount -R /mnt"
 echo "Para reiniciar: reboot"
