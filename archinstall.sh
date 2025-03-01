@@ -90,10 +90,6 @@ while [ "$ROOT_PASS" != "$ROOT_PASS_CONFIRM" ]; do
     read -s ROOT_PASS_CONFIRM
 done
 
-# Partições baseadas no disco escolhido
-BOOT_PART="${DISK}1"
-BTRFS_PART="${DISK}2"
-
 # Detecta se o sistema está em modo EFI
 if [ -d /sys/firmware/efi ]; then
     echo "Sistema detectado em modo UEFI."
@@ -101,6 +97,16 @@ if [ -d /sys/firmware/efi ]; then
 else
     echo "Sistema detectado em modo Legacy BIOS."
     EFI_MODE=false
+fi
+
+# Define partições baseadas no disco escolhido
+if $EFI_MODE; then
+    BOOT_PART="${DISK}1"  # EFI System Partition
+    BTRFS_PART="${DISK}2" # Btrfs
+else
+    BIOS_BOOT_PART="${DISK}1" # BIOS Boot Partition
+    BOOT_PART="${DISK}2"      # Boot partition
+    BTRFS_PART="${DISK}3"     # Btrfs
 fi
 
 # Resumo das configurações
@@ -111,8 +117,14 @@ echo "Teclado: $KEYBOARD"
 echo "Idioma: $LANGUAGE"
 echo "Disco: $DISK"
 echo "Usuário: $USER"
-echo "Partição EFI/Boot: $BOOT_PART"
-echo "Partição Btrfs: $BTRFS_PART"
+if $EFI_MODE; then
+    echo "Partição EFI: $BOOT_PART"
+    echo "Partição Btrfs: $BTRFS_PART"
+else
+    echo "Partição BIOS Boot: $BIOS_BOOT_PART"
+    echo "Partição Boot: $BOOT_PART"
+    echo "Partição Btrfs: $BTRFS_PART"
+fi
 echo "Modo de boot: $(if $EFI_MODE; then echo UEFI; else echo Legacy BIOS; fi)"
 
 read -rp "Confirmar? (s/n) " confirm
@@ -134,15 +146,23 @@ if $EFI_MODE; then
     parted -s "$DISK" mkpart primary fat32 1MiB 1GiB || { echo "Erro ao criar partição EFI"; exit 1; }
     parted -s "$DISK" set 1 esp on || { echo "Erro ao definir flag ESP"; exit 1; }
     parted -s "$DISK" set 1 boot on || { echo "Erro ao definir flag boot"; exit 1; }
+    parted -s "$DISK" mkpart primary btrfs 1GiB 100% || { echo "Erro ao criar partição Btrfs"; exit 1; }
 else
-    parted -s "$DISK" mkpart primary fat32 1MiB 1GiB || { echo "Erro ao criar partição boot"; exit 1; }
-    parted -s "$DISK" set 1 boot on || { echo "Erro ao definir flag boot"; exit 1; }
+    parted -s "$DISK" mkpart primary 1MiB 3MiB || { echo "Erro ao criar partição BIOS Boot"; exit 1; }
+    parted -s "$DISK" set 1 bios_grub on || { echo "Erro ao definir flag bios_grub"; exit 1; }
+    parted -s "$DISK" mkpart primary fat32 3MiB 1GiB || { echo "Erro ao criar partição Boot"; exit 1; }
+    parted -s "$DISK" set 2 boot on || { echo "Erro ao definir flag boot"; exit 1; }
+    parted -s "$DISK" mkpart primary btrfs 1GiB 100% || { echo "Erro ao criar partição Btrfs"; exit 1; }
 fi
-parted -s "$DISK" mkpart primary btrfs 1GiB 100% || { echo "Erro ao criar partição Btrfs"; exit 1; }
 
 # Formatação das partições
 echo "Formatando partições..."
-mkfs.fat -F32 "$BOOT_PART" || { echo "Erro ao formatar EFI/Boot"; exit 1; }
+if $EFI_MODE; then
+    mkfs.fat -F32 "$BOOT_PART" || { echo "Erro ao formatar EFI"; exit 1; }
+else
+    # Não formata a BIOS Boot Partition (deve ficar sem sistema de arquivos)
+    mkfs.fat -F32 "$BOOT_PART" || { echo "Erro ao formatar Boot"; exit 1; }
+fi
 mkfs.btrfs -f "$BTRFS_PART" || { echo "Erro ao formatar Btrfs"; exit 1; }
 
 # Configuração do Btrfs com subvolumes
