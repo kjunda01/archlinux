@@ -61,6 +61,10 @@ DISK=${DISKS[$?]}
 read -rp "Digite o nome do usuário [padrão: kjunda01]: " USER
 USER=${USER:-kjunda01}
 
+# Pergunta sobre o hostname
+read -rp "Digite o nome do host [padrão: archlinux]: " HOSTNAME
+HOSTNAME=${HOSTNAME:-archlinux}
+
 # Pergunta sobre as senhas
 echo "Digite a senha do usuário:"
 read -s USER_PASS
@@ -92,7 +96,7 @@ BTRFS_PART="${DISK}2"
 
 # Resumo das configurações
 echo -e "\nConfiguração escolhida:"
-echo "Hostname: archlinux"
+echo "Hostname: $HOSTNAME"
 echo "Fuso Horário: $TIMEZONE"
 echo "Teclado: $KEYBOARD"
 echo "Idioma: $LANGUAGE"
@@ -111,37 +115,64 @@ fi
 echo "Iniciando instalação..."
 
 # Atualiza o relógio do sistema
-timedatectl set-ntp true
+timedatectl set-ntp true || echo "Aviso: Falha ao sincronizar NTP"
 
-# Particionamento do disco
+# Particionamento do disco com verificação
 echo "Particionando o disco $DISK..."
-parted -s $DISK mklabel gpt
-parted -s $DISK mkpart primary fat32 1MiB 1GiB
-parted -s $DISK set 1 esp on
-parted -s $DISK set 1 boot on
-parted -s $DISK mkpart primary btrfs 1GiB 100%
+if ! parted -s "$DISK" mklabel gpt; then
+    echo "Erro ao criar tabela de partição GPT"
+    exit 1
+fi
+if ! parted -s "$DISK" mkpart primary fat32 1MiB 1GiB; then
+    echo "Erro ao criar partição EFI"
+    exit 1
+fi
+if ! parted -s "$DISK" set 1 esp on; then
+    echo "Erro ao definir flag ESP"
+    exit 1
+fi
+if ! parted -s "$DISK" set 1 boot on; then
+    echo "Erro ao definir flag boot"
+    exit 1
+fi
+if ! parted -s "$DISK" mkpart primary btrfs 1GiB 100%; then
+    echo "Erro ao criar partição Btrfs"
+    exit 1
+fi
 
-# Formatação das partições
-mkfs.fat -F32 $BOOT_PART
-mkfs.btrfs -f $BTRFS_PART
+# Formatação das partições com verificação
+echo "Formatando partições..."
+if ! mkfs.fat -F32 "$BOOT_PART"; then
+    echo "Erro ao formatar partição EFI"
+    exit 1
+fi
+if ! mkfs.btrfs -f "$BTRFS_PART"; then
+    echo "Erro ao formatar partição Btrfs"
+    exit 1
+fi
 
 # Configuração do Btrfs com subvolumes
-mount $BTRFS_PART /mnt
-btrfs subvolume create /mnt/@
-btrfs subvolume create /mnt/@home
-btrfs subvolume create /mnt/@log
-btrfs subvolume create /mnt/@pkg
-btrfs subvolume create /mnt/@.snapshots
+echo "Criando subvolumes Btrfs..."
+if ! mount "$BTRFS_PART" /mnt; then
+    echo "Erro ao montar partição Btrfs"
+    exit 1
+fi
+btrfs subvolume create /mnt/@ || { echo "Erro ao criar subvolume @"; exit 1; }
+btrfs subvolume create /mnt/@home || { echo "Erro ao criar subvolume @home"; exit 1; }
+btrfs subvolume create /mnt/@log || { echo "Erro ao criar subvolume @log"; exit 1; }
+btrfs subvolume create /mnt/@pkg || { echo "Erro ao criar subvolume @pkg"; exit 1; }
+btrfs subvolume create /mnt/@.snapshots || { echo "Erro ao criar subvolume @.snapshots"; exit 1; }
 umount /mnt
 
 # Montagem das partições
-mount -o compress=zstd,subvol=@ $BTRFS_PART /mnt
+echo "Montando partições..."
+mount -o compress=zstd,subvol=@ "$BTRFS_PART" /mnt || { echo "Erro ao montar subvolume @"; exit 1; }
 mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots}
-mount -o compress=zstd,subvol=@home $BTRFS_PART /mnt/home
-mount -o compress=zstd,subvol=@log $BTRFS_PART /mnt/var/log
-mount -o compress=zstd,subvol=@pkg $BTRFS_PART /mnt/var/cache/pacman/pkg
-mount -o compress=zstd,subvol=@.snapshots $BTRFS_PART /mnt/.snapshots
-mount $BOOT_PART /mnt/boot
+mount -o compress=zstd,subvol=@home "$BTRFS_PART" /mnt/home || { echo "Erro ao montar subvolume @home"; exit 1; }
+mount -o compress=zstd,subvol=@log "$BTRFS_PART" /mnt/var/log || { echo "Erro ao montar subvolume @log"; exit 1; }
+mount -o compress=zstd,subvol=@pkg "$BTRFS_PART" /mnt/var/cache/pacman/pkg || { echo "Erro ao montar subvolume @pkg"; exit 1; }
+mount -o compress=zstd,subvol=@.snapshots "$BTRFS_PART" /mnt/.snapshots || { echo "Erro ao montar subvolume @.snapshots"; exit 1; }
+mount "$BOOT_PART" /mnt/boot || { echo "Erro ao montar partição EFI"; exit 1; }
 
 # Finalização
 echo "Instalação concluída! Desmonte as partições e reinicie."
