@@ -152,29 +152,80 @@ if ! mkfs.btrfs -f "$BTRFS_PART"; then
 fi
 
 # Configuração do Btrfs com subvolumes
-echo "Criando subvolumes Btrfs..."
+echo "Montando partição Btrfs temporariamente em /mnt..."
 if ! mount "$BTRFS_PART" /mnt; then
-    echo "Erro ao montar partição Btrfs"
+    echo "Erro ao montar $BTRFS_PART em /mnt"
+    lsblk
     exit 1
 fi
-btrfs subvolume create /mnt/@ || { echo "Erro ao criar subvolume @"; exit 1; }
-btrfs subvolume create /mnt/@home || { echo "Erro ao criar subvolume @home"; exit 1; }
-btrfs subvolume create /mnt/@log || { echo "Erro ao criar subvolume @log"; exit 1; }
-btrfs subvolume create /mnt/@pkg || { echo "Erro ao criar subvolume @pkg"; exit 1; }
-btrfs subvolume create /mnt/@.snapshots || { echo "Erro ao criar subvolume @.snapshots"; exit 1; }
-umount /mnt
 
-# Montagem das partições
-echo "Montando partições..."
-mount -o compress=zstd,subvol=@ "$BTRFS_PART" /mnt || { echo "Erro ao montar subvolume @"; exit 1; }
-mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots}
-mount -o compress=zstd,subvol=@home "$BTRFS_PART" /mnt/home || { echo "Erro ao montar subvolume @home"; exit 1; }
-mount -o compress=zstd,subvol=@log "$BTRFS_PART" /mnt/var/log || { echo "Erro ao montar subvolume @log"; exit 1; }
-mount -o compress=zstd,subvol=@pkg "$BTRFS_PART" /mnt/var/cache/pacman/pkg || { echo "Erro ao montar subvolume @pkg"; exit 1; }
-mount -o compress=zstd,subvol=@.snapshots "$BTRFS_PART" /mnt/.snapshots || { echo "Erro ao montar subvolume @.snapshots"; exit 1; }
-mount "$BOOT_PART" /mnt/boot || { echo "Erro ao montar partição EFI"; exit 1; }
+echo "Criando subvolumes Btrfs..."
+for subvol in @ @home @log @pkg @.snapshots; do
+    if ! btrfs subvolume create "/mnt/$subvol"; then
+        echo "Erro ao criar subvolume $subvol"
+        umount /mnt
+        exit 1
+    fi
+done
+
+echo "Desmontando /mnt..."
+if ! umount /mnt; then
+    echo "Erro ao desmontar /mnt"
+    exit 1
+fi
+
+# Montagem das partições com verificação
+echo "Montando partições com subvolumes..."
+if ! mount -o compress=zstd,subvol=@ "$BTRFS_PART" /mnt; then
+    echo "Erro ao montar subvolume @ em /mnt"
+    lsblk
+    exit 1
+fi
+
+echo "Criando diretórios de montagem..."
+mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots} || {
+    echo "Erro ao criar diretórios em /mnt"
+    umount /mnt
+    exit 1
+}
+
+echo "Montando subvolume @home..."
+if ! mount -o compress=zstd,subvol=@home "$BTRFS_PART" /mnt/home; then
+    echo "Erro ao montar subvolume @home"
+    umount -R /mnt
+    exit 1
+fi
+
+echo "Montando subvolume @log..."
+if ! mount -o compress=zstd,subvol=@log "$BTRFS_PART" /mnt/var/log; then
+    echo "Erro ao montar subvolume @log"
+    umount -R /mnt
+    exit 1
+fi
+
+echo "Montando subvolume @pkg..."
+if ! mount -o compress=zstd,subvol=@pkg "$BTRFS_PART" /mnt/var/cache/pacman/pkg; then
+    echo "Erro ao montar subvolume @pkg"
+    umount -R /mnt
+    exit 1
+fi
+
+echo "Montando subvolume @.snapshots..."
+if ! mount -o compress=zstd,subvol=@.snapshots "$BTRFS_PART" /mnt/.snapshots; then
+    echo "Erro ao montar subvolume @.snapshots"
+    umount -R /mnt
+    exit 1
+fi
+
+echo "Montando partição EFI..."
+if ! mount "$BOOT_PART" /mnt/boot; then
+    echo "Erro ao montar partição EFI em /mnt/boot"
+    umount -R /mnt
+    exit 1
+fi
 
 # Finalização
-echo "Instalação concluída! Desmonte as partições e reinicie."
+echo "Instalação concluída com sucesso!"
+echo "Partições montadas em /mnt. Verifique com 'lsblk' se necessário."
 echo "Para desmontar: umount -R /mnt"
 echo "Para reiniciar: reboot"
