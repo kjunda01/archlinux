@@ -94,6 +94,15 @@ done
 BOOT_PART="${DISK}1"
 BTRFS_PART="${DISK}2"
 
+# Detecta se o sistema está em modo EFI
+if [ -d /sys/firmware/efi ]; then
+    echo "Sistema detectado em modo UEFI."
+    EFI_MODE=true
+else
+    echo "Sistema detectado em modo Legacy BIOS."
+    EFI_MODE=false
+fi
+
 # Resumo das configurações
 echo -e "\nConfiguração escolhida:"
 echo "Hostname: $HOSTNAME"
@@ -102,8 +111,9 @@ echo "Teclado: $KEYBOARD"
 echo "Idioma: $LANGUAGE"
 echo "Disco: $DISK"
 echo "Usuário: $USER"
-echo "Partição EFI: $BOOT_PART"
+echo "Partição EFI/Boot: $BOOT_PART"
 echo "Partição Btrfs: $BTRFS_PART"
+echo "Modo de boot: $(if $EFI_MODE; then echo UEFI; else echo Legacy BIOS; fi)"
 
 read -rp "Confirmar? (s/n) " confirm
 if [[ "$confirm" != "s" ]]; then
@@ -120,14 +130,19 @@ timedatectl set-ntp true || echo "Aviso: Falha ao sincronizar NTP"
 # Particionamento do disco
 echo "Particionando o disco $DISK..."
 parted -s "$DISK" mklabel gpt || { echo "Erro ao criar tabela GPT"; exit 1; }
-parted -s "$DISK" mkpart primary fat32 1MiB 1GiB || { echo "Erro ao criar partição EFI"; exit 1; }
-parted -s "$DISK" set 1 esp on || { echo "Erro ao definir flag ESP"; exit 1; }
-parted -s "$DISK" set 1 boot on || { echo "Erro ao definir flag boot"; exit 1; }
+if $EFI_MODE; then
+    parted -s "$DISK" mkpart primary fat32 1MiB 1GiB || { echo "Erro ao criar partição EFI"; exit 1; }
+    parted -s "$DISK" set 1 esp on || { echo "Erro ao definir flag ESP"; exit 1; }
+    parted -s "$DISK" set 1 boot on || { echo "Erro ao definir flag boot"; exit 1; }
+else
+    parted -s "$DISK" mkpart primary fat32 1MiB 1GiB || { echo "Erro ao criar partição boot"; exit 1; }
+    parted -s "$DISK" set 1 boot on || { echo "Erro ao definir flag boot"; exit 1; }
+fi
 parted -s "$DISK" mkpart primary btrfs 1GiB 100% || { echo "Erro ao criar partição Btrfs"; exit 1; }
 
 # Formatação das partições
 echo "Formatando partições..."
-mkfs.fat -F32 "$BOOT_PART" || { echo "Erro ao formatar EFI"; exit 1; }
+mkfs.fat -F32 "$BOOT_PART" || { echo "Erro ao formatar EFI/Boot"; exit 1; }
 mkfs.btrfs -f "$BTRFS_PART" || { echo "Erro ao formatar Btrfs"; exit 1; }
 
 # Configuração do Btrfs com subvolumes
@@ -146,7 +161,7 @@ mount -o compress=zstd,subvol=@home "$BTRFS_PART" /mnt/home || { echo "Erro ao m
 mount -o compress=zstd,subvol=@log "$BTRFS_PART" /mnt/var/log || { echo "Erro ao montar @log"; umount -R /mnt; exit 1; }
 mount -o compress=zstd,subvol=@pkg "$BTRFS_PART" /mnt/var/cache/pacman/pkg || { echo "Erro ao montar @pkg"; umount -R /mnt; exit 1; }
 mount -o compress=zstd,subvol=@.snapshots "$BTRFS_PART" /mnt/.snapshots || { echo "Erro ao montar @.snapshots"; umount -R /mnt; exit 1; }
-mount "$BOOT_PART" /mnt/boot || { echo "Erro ao montar EFI"; umount -R /mnt; exit 1; }
+mount "$BOOT_PART" /mnt/boot || { echo "Erro ao montar EFI/Boot"; umount -R /mnt; exit 1; }
 
 # Instalação do sistema base
 echo "Instalando pacotes base..."
@@ -188,8 +203,13 @@ useradd -m -G wheel -s /bin/bash "$USER" || { echo "Erro ao criar usuário"; exi
 echo "$USER:$USER_PASS" | chpasswd || { echo "Erro ao configurar senha do usuário"; exit 1; }
 
 # Instala o GRUB e utilitários
-pacman -S --noconfirm grub efibootmgr || { echo "Erro ao instalar GRUB"; exit 1; }
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB || { echo "Erro ao instalar GRUB"; exit 1; }
+pacman -S --noconfirm grub
+if [ "$EFI_MODE" = true ]; then
+    pacman -S --noconfirm efibootmgr || { echo "Erro ao instalar efibootmgr"; exit 1; }
+    grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB || { echo "Erro ao instalar GRUB (UEFI)"; exit 1; }
+else
+    grub-install --target=i386-pc "$DISK" || { echo "Erro ao instalar GRUB (Legacy)"; exit 1; }
+fi
 grub-mkconfig -o /boot/grub/grub.cfg || { echo "Erro ao gerar configuração do GRUB"; exit 1; }
 
 # Habilita o usuário wheel para sudo (opcional)
