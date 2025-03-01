@@ -2,10 +2,6 @@
 
 # Verifica se está sendo executado como root
 if [ "$EUID" -ne 0 ]; then
-#!/bin/bash
-
-# Verifica se está sendo executado como root
-if [ "$EUID" -ne 0 ]; then
     echo "Este script deve ser executado como root!"
     exit 1
 fi
@@ -26,6 +22,7 @@ select_option() {
     while true; do
         read -rp "Escolha uma opção [1-${#options[@]}]: " choice
         if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#options[@]})); then
+            echo "${options[choice-1]}"
             return $((choice - 1))
         else
             echo "Opção inválida. Tente novamente."
@@ -65,8 +62,10 @@ read -rp "Digite o nome do usuário [padrão: kjunda01]: " USER
 USER=${USER:-kjunda01}
 
 # Pergunta sobre as senhas
-read -rp "Digite a senha do usuário: " USER_PASS
-read -rp "Digite a senha do root: " ROOT_PASS
+echo "Digite a senha do usuário:"
+read -s USER_PASS
+echo "Digite a senha do root:"
+read -s ROOT_PASS
 
 # Partições baseadas no disco escolhido
 BOOT_PART="${DISK}p1"
