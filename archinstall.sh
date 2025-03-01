@@ -1,10 +1,16 @@
 #!/bin/bash
 
+# Script para instalação e configuração do Arch Linux
+# Execute como root em um ambiente live do Arch Linux
+
 # Verifica se está sendo executado como root
 if [ "$EUID" -ne 0 ]; then
     echo "Este script deve ser executado como root!"
     exit 1
 fi
+
+# Define variáveis iniciais
+HOSTNAME="archlinux"
 
 # Função para exibir menu de seleção
 select_option() {
@@ -30,45 +36,41 @@ select_option() {
     done
 }
 
-# Lista de fusos horários disponíveis no Brasil
+# Configurações interativas
 TIMEZONES=("America/Sao_Paulo" "America/Fortaleza" "America/Recife" "America/Manaus" "America/Porto_Velho" "America/Cuiaba")
 TIMEZONE=$(select_option "Escolha seu fuso horário:" "${TIMEZONES[@]}")
 
-# Lista de layouts de teclado comuns
 KEYBOARDS=("us" "br-abnt2" "uk" "de" "fr")
 KEYBOARD=$(select_option "Escolha o layout do teclado:" "${KEYBOARDS[@]}")
 
-# Lista de idiomas disponíveis
 LANGUAGES=("en_US.UTF-8" "pt_BR.UTF-8" "es_ES.UTF-8" "fr_FR.UTF-8")
 LANGUAGE=$(select_option "Escolha o idioma do sistema:" "${LANGUAGES[@]}")
 
 # Descobrir discos disponíveis
 echo "Detectando discos disponíveis..."
-DISKS=( $(lsblk -d -n -o NAME | awk '{print "/dev/" $1}') )
-
+DISKS=($(lsblk -d -n -o NAME,SIZE | awk '{print "/dev/" $1 " (" $2 ")"}'))
 if [ ${#DISKS[@]} -eq 0 ]; then
     echo "Nenhum disco detectado. Abortando."
     exit 1
 fi
-
 DISK=$(select_option "Escolha o disco para instalar o sistema:" "${DISKS[@]}")
+DISK=$(echo "$DISK" | awk '{print $1}')  # Pega apenas o nome do dispositivo
 
-# Pergunta sobre o usuário
+# Entrada de usuário e senhas
 read -rp "Digite o nome do usuário [padrão: kjunda01]: " USER
 USER=${USER:-kjunda01}
-
-# Pergunta sobre as senhas
-read -rsp "Digite a senha do usuário: " USER_PASS
+read -sp "Digite a senha do usuário: " USER_PASS
 echo
-read -rsp "Digite a senha do root: " ROOT_PASS
+read -sp "Digite a senha do root: " ROOT_PASS
 echo
 
-# Partições baseadas no disco escolhido
-BOOT_PART="${DISK}1"
-BTRFS_PART="${DISK}2"
+# Define partições
+BOOT_PART="${DISK}p1"
+BTRFS_PART="${DISK}p2"
 
 # Resumo das configurações
 echo -e "\nConfiguração escolhida:"
+echo "Hostname: $HOSTNAME"
 echo "Fuso Horário: $TIMEZONE"
 echo "Teclado: $KEYBOARD"
 echo "Idioma: $LANGUAGE"
@@ -83,44 +85,92 @@ if [[ "$confirm" != "s" ]]; then
     exit 1
 fi
 
-# Iniciando instalação...
-timedatectl set-ntp true
+# Início da instalação
+echo "Iniciando instalação..."
+
+# Atualiza o relógio do sistema
+timedatectl set-ntp true || { echo "Erro ao atualizar o relógio"; exit 1; }
 
 # Particionamento do disco
 echo "Particionando o disco $DISK..."
-parted -s $DISK mklabel gpt
-parted -s $DISK mkpart primary fat32 1MiB 1GiB
-parted -s $DISK set 1 esp on
-parted -s $DISK set 1 boot on
-parted -s $DISK mkpart primary btrfs 1GiB 100%
+echo -e "g\nn\n1\n\n+512M\nef00\nt\n1\nef\nn\n2\n\n\n8300\nw" | gdisk "$DISK" || { echo "Erro ao particionar"; exit 1; }
 
 # Formatação das partições
-mkfs.fat -F32 $BOOT_PART
-mkfs.btrfs -f $BTRFS_PART
-
-# Configuração do Btrfs com subvolumes
-mount $BTRFS_PART /mnt
-btrfs subvolume create /mnt/@
-btrfs subvolume create /mnt/@home
-btrfs subvolume create /mnt/@log
-btrfs subvolume create /mnt/@pkg
-btrfs subvolume create /mnt/@.snapshots
-umount /mnt
+mkfs.fat -F32 "$BOOT_PART" || { echo "Erro ao formatar partição EFI"; exit 1; }
+mkfs.btrfs -f "$BTRFS_PART" || { echo "Erro ao formatar partição Btrfs"; exit 1; }
 
 # Montagem das partições
-mount -o compress=zstd,subvol=@ $BTRFS_PART /mnt
-mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots}
-mount -o compress=zstd,subvol=@home $BTRFS_PART /mnt/home
-mount -o compress=zstd,subvol=@log $BTRFS_PART /mnt/var/log
-mount -o compress=zstd,subvol=@pkg $BTRFS_PART /mnt/var/cache/pacman/pkg
-mount -o compress=zstd,subvol=@.snapshots $BTRFS_PART /mnt/.snapshots
-mount $BOOT_PART /mnt/boot
+mount "$BTRFS_PART" /mnt || { echo "Erro ao montar partição Btrfs"; exit 1; }
+mkdir /mnt/boot
+mount "$BOOT_PART" /mnt/boot || { echo "Erro ao montar partição EFI"; exit 1; }
+
+# Configuração de mirrors brasileiros com reflector
+echo "Configurando mirrors brasileiros..."
+pacman -Sy --noconfirm reflector || { echo "Erro ao instalar reflector"; exit 1; }
+reflector --country Brazil --latest 10 --sort rate --save /etc/pacman.d/mirrorlist || { echo "Erro ao configurar mirrors"; exit 1; }
 
 # Instalação do sistema base
-pacstrap /mnt base linux linux-firmware
+pacstrap /mnt base linux linux-firmware || { echo "Erro no pacstrap"; exit 1; }
 
-genfstab -U /mnt >> /mnt/etc/fstab
+# Geração do fstab
+genfstab -U /mnt >> /mnt/etc/fstab || { echo "Erro no genfstab"; exit 1; }
 
-echo "Instalação concluída! Reinicie o sistema."
+# Configuração do sistema instalado via chroot
+cat << EOF > /mnt/root/chroot-script.sh
+#!/bin/bash
+
+# Configuração de fuso horário
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+hwclock --systohc
+
+# Configuração de locale
+echo "$LANGUAGE UTF-8" > /etc/locale.gen
+locale-gen
+echo "LANG=$LANGUAGE" > /etc/locale.conf
+echo "KEYMAP=$KEYBOARD" > /etc/vconsole.conf
+
+# Configuração do hostname
+echo "$HOSTNAME" > /etc/hostname
+cat << HOSTS > /etc/hosts
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+HOSTS
+
+# Atualização e instalação de pacotes adicionais
+pacman -Syu --noconfirm
+pacman -S --noconfirm grub efibootmgr nano vim openssh samba wget curl \
+pipewire pipewire-pulse networkmanager hyprland sddm polkit kitty wayland
+
+# Configuração de áudio (PipeWire)
+systemctl enable pipewire pipewire-pulse
+
+# Configuração de rede (NetworkManager)
+systemctl enable NetworkManager
+
+# Configuração do SDDM (greeter)
+systemctl enable sddm
+
+# Configuração do bootloader (Grub)
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+grub-mkconfig -o /boot/grub/grub.cfg
+
+# Configuração de usuário e root
+echo "root:$ROOT_PASS" | chpasswd
+useradd -m -G wheel -s /bin/bash "$USER"
+echo "$USER:$USER_PASS" | chpasswd
+echo "$USER ALL=(ALL) ALL" > /etc/sudoers.d/$USER
+chmod 440 /etc/sudoers.d/$USER
+
+# Remove o script após execução
+rm -- "\$0"
+EOF
+
+# Torna o script executável e executa no chroot
+chmod +x /mnt/root/chroot-script.sh
+arch-chroot /mnt /root/chroot-script.sh || { echo "Erro no chroot"; exit 1; }
+
+# Finalização
+echo "Instalação concluída!"
 echo "Para desmontar: umount -R /mnt"
 echo "Para reiniciar: reboot"
