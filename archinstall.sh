@@ -42,13 +42,15 @@ KEYBOARD=$(select_option "Escolha o layout do teclado:" "${KEYBOARDS[@]}")
 LANGUAGES=("en_US.UTF-8" "pt_BR.UTF-8" "es_ES.UTF-8" "fr_FR.UTF-8")
 LANGUAGE=$(select_option "Escolha o idioma do sistema:" "${LANGUAGES[@]}")
 
-# Detectar discos disponíveis corretamente
+# Descobrir discos disponíveis
 echo "Detectando discos disponíveis..."
-DISKS=($(lsblk -d -n -o NAME | awk '{print "/dev/" $1}'))
+DISKS=( $(lsblk -d -n -o NAME | awk '{print "/dev/" $1}') )
+
 if [ ${#DISKS[@]} -eq 0 ]; then
     echo "Nenhum disco detectado. Abortando."
     exit 1
 fi
+
 DISK=$(select_option "Escolha o disco para instalar o sistema:" "${DISKS[@]}")
 
 # Pergunta sobre o usuário
@@ -56,12 +58,12 @@ read -rp "Digite o nome do usuário [padrão: kjunda01]: " USER
 USER=${USER:-kjunda01}
 
 # Pergunta sobre as senhas
-read -srp "Digite a senha do usuário: " USER_PASS
+read -rsp "Digite a senha do usuário: " USER_PASS
 echo
-read -srp "Digite a senha do root: " ROOT_PASS
+read -rsp "Digite a senha do root: " ROOT_PASS
 echo
 
-# Criar partições corretamente
+# Partições baseadas no disco escolhido
 BOOT_PART="${DISK}1"
 BTRFS_PART="${DISK}2"
 
@@ -81,10 +83,7 @@ if [[ "$confirm" != "s" ]]; then
     exit 1
 fi
 
-# Continua com o restante do script...
-echo "Iniciando instalação..."
-
-# Atualiza o relógio do sistema
+# Iniciando instalação...
 timedatectl set-ntp true
 
 # Particionamento do disco
@@ -120,35 +119,8 @@ mount $BOOT_PART /mnt/boot
 # Instalação do sistema base
 pacstrap /mnt base linux linux-firmware
 
-# Geração do fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Chroot e configuração pós-instalação
-arch-chroot /mnt bash <<EOF
-ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
-hwclock --systohc
-sed -i 's/#$LANGUAGE/$LANGUAGE/' /etc/locale.gen
-locale-gen
-echo "LANG=$LANGUAGE" > /etc/locale.conf
-echo "KEYMAP=$KEYBOARD" > /etc/vconsole.conf
-echo "archlinux" > /etc/hostname
-cat << HOSTS > /etc/hosts
-127.0.0.1   localhost
-::1         localhost
-127.0.1.1   archlinux.localdomain archlinux
-HOSTS
-
-# Configuração do bootloader
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-grub-mkconfig -o /boot/grub/grub.cfg
-
-# Criação de usuário
-echo "root:$ROOT_PASS" | chpasswd
-useradd -m -G wheel -s /bin/bash $USER
-echo "$USER:$USER_PASS" | chpasswd
-echo "$USER ALL=(ALL) ALL" >> /etc/sudoers.d/$USER
-chmod 440 /etc/sudoers.d/$USER
-EOF
-
-# Finalização
-echo "Instalação concluída! Desmonte as partições e reinicie."
+echo "Instalação concluída! Reinicie o sistema."
+echo "Para desmontar: umount -R /mnt"
+echo "Para reiniciar: reboot"
