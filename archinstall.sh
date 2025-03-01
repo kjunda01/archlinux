@@ -185,7 +185,7 @@ mount "$BOOT_PART" /mnt/boot || { echo "Erro ao montar EFI/Boot"; umount -R /mnt
 
 # Instalação do sistema base
 echo "Instalando pacotes base..."
-pacstrap /mnt base linux linux-firmware || { echo "Erro ao instalar pacotes base"; umount -R /mnt; exit 1; }
+pacstrap /mnt base linux linux-firmware networkmanager git || { echo "Erro ao instalar pacotes base"; umount -R /mnt; exit 1; }
 
 # Geração do fstab
 echo "Gerando fstab..."
@@ -236,6 +236,9 @@ grub-mkconfig -o /boot/grub/grub.cfg || { echo "Erro ao gerar configuração do 
 mkdir -p /etc/sudoers.d || { echo "Erro ao criar diretório /etc/sudoers.d"; exit 1; }
 echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel || { echo "Erro ao configurar sudoers.d/wheel"; exit 1; }
 chmod 440 /etc/sudoers.d/wheel || { echo "Erro ao definir permissões do sudoers.d/wheel"; exit 1; }
+
+# Habilita o NetworkManager para iniciar no boot
+systemctl enable NetworkManager || { echo "Erro ao habilitar NetworkManager"; exit 1; }
 
 exit
 EOF
