@@ -43,18 +43,21 @@ LANGUAGES=("en_US.UTF-8" "pt_BR.UTF-8" "es_ES.UTF-8" "fr_FR.UTF-8")
 LANGUAGE=$(select_option "Escolha o idioma do sistema:" "${LANGUAGES[@]}")
 
 # Descobrir discos disponíveis
-DISKS=($(lsblk -d -n -o NAME | awk '{print "/dev/" $1}'))
+echo "Detectando discos disponíveis..."
+DISKS=($(lsblk -d -n -o NAME,SIZE | awk '{print "/dev/" $1}' | tr '\n' ' '))
+
 if [ ${#DISKS[@]} -eq 0 ]; then
     echo "Nenhum disco detectado. Abortando."
     exit 1
 fi
+
 DISK=$(select_option "Escolha o disco para instalar o sistema:" "${DISKS[@]}")
 
 # Pergunta sobre o usuário
 read -rp "Digite o nome do usuário [padrão: kjunda01]: " USER
 USER=${USER:-kjunda01}
 
-# Pergunta sobre as senhas (com confirmação)
+# Pergunta sobre as senhas
 while true; do
     read -rsp "Digite a senha do usuário: " USER_PASS
     echo
@@ -73,22 +76,46 @@ while true; do
     echo "As senhas não coincidem. Tente novamente."
 done
 
-# Criando partições corretamente
-parted -s "$DISK" mklabel gpt
-parted -s "$DISK" mkpart primary fat32 1MiB 1GiB
-parted -s "$DISK" set 1 esp on
-parted -s "$DISK" mkpart primary btrfs 1GiB 100%
-
-# Definir partições corretamente
+# Partições baseadas no disco escolhido
 BOOT_PART="${DISK}1"
 BTRFS_PART="${DISK}2"
 
-# Formatar partições
-mkfs.fat -F32 "$BOOT_PART"
-mkfs.btrfs -f "$BTRFS_PART"
+# Resumo das configurações
+echo -e "\nConfiguração escolhida:"
+echo "Hostname: archlinux"
+echo "Fuso Horário: $TIMEZONE"
+echo "Teclado: $KEYBOARD"
+echo "Idioma: $LANGUAGE"
+echo "Disco: $DISK"
+echo "Usuário: $USER"
+echo "Partição EFI: $BOOT_PART"
+echo "Partição Btrfs: $BTRFS_PART"
 
-# Criar subvolumes e montar corretamente
-mount "$BTRFS_PART" /mnt
+read -rp "Confirmar? (s/n) " confirm
+if [[ "$confirm" != "s" ]]; then
+    echo "Instalação cancelada."
+    exit 1
+fi
+
+# Continua com o restante do script...
+echo "Iniciando instalação..."
+
+# Atualiza o relógio do sistema
+timedatectl set-ntp true
+
+# Particionamento do disco
+echo "Particionando o disco $DISK..."
+parted -s $DISK mklabel gpt
+parted -s $DISK mkpart primary fat32 1MiB 1GiB
+parted -s $DISK set 1 esp on
+parted -s $DISK mkpart primary btrfs 1GiB 100%
+
+# Formatação das partições
+mkfs.fat -F32 $BOOT_PART
+mkfs.btrfs -f $BTRFS_PART
+
+# Configuração do Btrfs com subvolumes
+mount $BTRFS_PART /mnt
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
 btrfs subvolume create /mnt/@log
@@ -96,57 +123,13 @@ btrfs subvolume create /mnt/@pkg
 btrfs subvolume create /mnt/@.snapshots
 umount /mnt
 
-mount -o compress=zstd,subvol=@ "$BTRFS_PART" /mnt
+# Montagem das partições
+mount -o compress=zstd,subvol=@ $BTRFS_PART /mnt
 mkdir -p /mnt/{boot,home,var/log,var/cache/pacman/pkg,.snapshots}
-mount -o compress=zstd,subvol=@home "$BTRFS_PART" /mnt/home
-mount -o compress=zstd,subvol=@log "$BTRFS_PART" /mnt/var/log
-mount -o compress=zstd,subvol=@pkg "$BTRFS_PART" /mnt/var/cache/pacman/pkg
-mount -o compress=zstd,subvol=@.snapshots "$BTRFS_PART" /mnt/.snapshots
-mount "$BOOT_PART" /mnt/boot
+mount -o compress=zstd,subvol=@home $BTRFS_PART /mnt/home
+mount -o compress=zstd,subvol=@log $BTRFS_PART /mnt/var/log
+mount -o compress=zstd,subvol=@pkg $BTRFS_PART /mnt/var/cache/pacman/pkg
+mount -o compress=zstd,subvol=@.snapshots $BTRFS_PART /mnt/.snapshots
+mount $BOOT_PART /mnt/boot
 
-# Instalar sistema base
-pacstrap /mnt base linux linux-firmware
-
-# Gerar fstab
-genfstab -U /mnt >> /mnt/etc/fstab
-
-# Criar script para chroot
-cat << EOF > /mnt/root/chroot-script.sh
-#!/bin/bash
-ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
-hwclock --systohc
-sed -i 's/#$LANGUAGE/$LANGUAGE/' /etc/locale.gen
-locale-gen
-echo "LANG=$LANGUAGE" > /etc/locale.conf
-echo "KEYMAP=$KEYBOARD" > /etc/vconsole.conf
-echo "archlinux" > /etc/hostname
-echo "root:$ROOT_PASS" | chpasswd
-useradd -m -G wheel -s /bin/bash $USER
-echo "$USER:$USER_PASS" | chpasswd
-echo "$USER ALL=(ALL) ALL" >> /etc/sudoers.d/$USER
-chmod 440 /etc/sudoers.d/$USER
-
-# Instalar pacotes essenciais
-pacman -Syu --noconfirm
-pacman -S --noconfirm grub efibootmgr networkmanager pipewire pipewire-pulse hyprland sddm
-
-# Configurar bootloader
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-grub-mkconfig -o /boot/grub/grub.cfg
-
-# Habilitar serviços
-systemctl enable NetworkManager
-systemctl enable sddm
-systemctl enable pipewire pipewire-pulse
-
-rm -- "\$0"
-EOF
-
-chmod +x /mnt/root/chroot-script.sh
-arch-chroot /mnt /root/chroot-script.sh
-
-# Finalização
-echo "Instalação concluída! Reinicie o sistema."
-echo "Para desmontar: umount -R /mnt"
-echo "Para reiniciar: reboot"
-
+echo "Particionamento e montagem concluídos!"
