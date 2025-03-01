@@ -6,6 +6,11 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Verifica dependências necessárias
+for cmd in parted pacstrap genfstab arch-chroot lspci ping; do
+    command -v "$cmd" >/dev/null 2>&1 || { echo "Erro: $cmd não encontrado. Instale-o antes de continuar."; exit 1; }
+done
+
 # Função para exibir menu de seleção
 select_option() {
     local prompt="$1"
@@ -57,17 +62,35 @@ fi
 select_option "Escolha o disco para instalar o sistema:" "${DISKS[@]}"
 DISK=${DISKS[$?]}
 
-# Pergunta sobre o usuário
-read -rp "Digite o nome do usuário [padrão: kjunda01]: " USER
-USER=${USER:-kjunda01}
+# Pergunta sobre o usuário com validação
+while true; do
+    read -rp "Digite o nome do usuário [padrão: kjunda01]: " USER
+    USER=${USER:-kjunda01}
+    if [[ "$USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        break
+    else
+        echo "Nome de usuário inválido. Use apenas letras minúsculas, números, '_' ou '-' (começando com letra ou '_')."
+    fi
+done
 
-# Pergunta sobre o hostname
-read -rp "Digite o nome do host [padrão: archlinux]: " HOSTNAME
-HOSTNAME=${HOSTNAME:-archlinux}
+# Pergunta sobre o hostname com validação
+while true; do
+    read -rp "Digite o nome do host [padrão: archlinux]: " HOSTNAME
+    HOSTNAME=${HOSTNAME:-archlinux}
+    if [[ "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*$ ]]; then
+        break
+    else
+        echo "Hostname inválido. Use apenas letras, números ou '-' (sem espaços ou caracteres especiais)."
+    fi
+done
 
-# Pergunta sobre as senhas
-echo "Digite a senha do usuário:"
+# Pergunta sobre as senhas com verificação mínima
+echo "Digite a senha do usuário (mínimo 8 caracteres):"
 read -s USER_PASS
+while [ ${#USER_PASS} -lt 8 ]; do
+    echo "Senha muito curta. Mínimo de 8 caracteres."
+    read -s USER_PASS
+done
 echo "Confirme a senha do usuário:"
 read -s USER_PASS_CONFIRM
 while [ "$USER_PASS" != "$USER_PASS_CONFIRM" ]; do
@@ -78,8 +101,12 @@ while [ "$USER_PASS" != "$USER_PASS_CONFIRM" ]; do
     read -s USER_PASS_CONFIRM
 done
 
-echo "Digite a senha do root:"
+echo "Digite a senha do root (mínimo 8 caracteres):"
 read -s ROOT_PASS
+while [ ${#ROOT_PASS} -lt 8 ]; do
+    echo "Senha muito curta. Mínimo de 8 caracteres."
+    read -s ROOT_PASS
+done
 echo "Confirme a senha do root:"
 read -s ROOT_PASS_CONFIRM
 while [ "$ROOT_PASS" != "$ROOT_PASS_CONFIRM" ]; do
@@ -131,6 +158,14 @@ read -rp "Confirmar? (s/n) " confirm
 if [[ "$confirm" != "s" ]]; then
     echo "Instalação cancelada."
     exit 1
+fi
+
+# Verifica conexão de rede
+echo "Verificando conexão de rede..."
+if ! ping -c 3 archlinux.org >/dev/null 2>&1; then
+    echo "Aviso: Sem conexão de rede detectada. A instalação pode falhar."
+    read -rp "Continuar mesmo assim? (s/n) " net_confirm
+    [[ "$net_confirm" != "s" ]] && { echo "Instalação cancelada."; exit 1; }
 fi
 
 # Inicia a instalação
@@ -216,14 +251,15 @@ HOSTS
 [ \$? -ne 0 ] && { echo "Erro ao configurar /etc/hosts"; exit 1; }
 
 # Configura a senha do root
-echo "root:$ROOT_PASS" | chpasswd || { echo "Erro ao configurar senha do root"; exit 1; }
+echo "$ROOT_PASS" | passwd --stdin root || { echo "Erro ao configurar senha do root"; exit 1; }
 
 # Cria o usuário
 useradd -m -G wheel -s /bin/bash "$USER" || { echo "Erro ao criar usuário"; exit 1; }
-echo "$USER:$USER_PASS" | chpasswd || { echo "Erro ao configurar senha do usuário"; exit 1; }
+echo "$USER_PASS" | passwd --stdin "$USER" || { echo "Erro ao configurar senha do usuário"; exit 1; }
 
-# Instala o GRUB e utilitários
-pacman -S --noconfirm grub
+# Atualiza o sistema e instala pacotes adicionais
+pacman -Syu --noconfirm || { echo "Erro ao atualizar pacotes"; exit 1; }
+pacman -S --noconfirm grub || { echo "Erro ao instalar GRUB"; exit 1; }
 if [ "$EFI_MODE" = true ]; then
     pacman -S --noconfirm efibootmgr || { echo "Erro ao instalar efibootmgr"; exit 1; }
     grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB || { echo "Erro ao instalar GRUB (UEFI)"; exit 1; }
@@ -232,12 +268,30 @@ else
 fi
 grub-mkconfig -o /boot/grub/grub.cfg || { echo "Erro ao gerar configuração do GRUB"; exit 1; }
 
-# Habilita o usuário wheel para sudo (opcional)
+# Habilita o usuário wheel para sudo
 mkdir -p /etc/sudoers.d || { echo "Erro ao criar diretório /etc/sudoers.d"; exit 1; }
 echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel || { echo "Erro ao configurar sudoers.d/wheel"; exit 1; }
 chmod 440 /etc/sudoers.d/wheel || { echo "Erro ao definir permissões do sudoers.d/wheel"; exit 1; }
 
-# Habilita o NetworkManager para iniciar no boot
+# Instala o Hyprland e dependências
+pacman -S --noconfirm dolphin dunst grim hyprland kitty polkit-kde-agent qt5-wayland qt6-wayland slurp wofi xdg-desktop-portal-hyprland swaync polkit || { echo "Erro ao instalar Hyprland"; exit 1; }
+
+# Detecta GPU e instala drivers apropriados
+GPU=\$(lspci | grep -i "vga\|3d\|display")
+if echo "\$GPU" | grep -qi "intel"; then
+    pacman -S --noconfirm intel-media-driver libva-intel-driver vulkan-intel || { echo "Erro ao instalar drivers Intel"; exit 1; }
+elif echo "\$GPU" | grep -qi "amd\|radeon"; then
+    pacman -S --noconfirm libva-mesa-driver mesa vulkan-radeon xf86-video-amdgpu xf86-video-ati || { echo "Erro ao instalar drivers AMD"; exit 1; }
+elif echo "\$GPU" | grep -qi "nvidia"; then
+    pacman -S --noconfirm xf86-video-nouveau || { echo "Erro ao instalar drivers NVIDIA"; exit 1; }
+fi
+pacman -S --noconfirm xorg-server xorg-xinit || { echo "Erro ao instalar Xorg"; exit 1; }
+
+# Instala e habilita o SDDM
+pacman -S --noconfirm sddm || { echo "Erro ao instalar SDDM"; exit 1; }
+systemctl enable sddm || { echo "Erro ao habilitar SDDM"; exit 1; }
+
+# Habilita o NetworkManager
 systemctl enable NetworkManager || { echo "Erro ao habilitar NetworkManager"; exit 1; }
 
 exit
@@ -250,17 +304,8 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Instala o Hyprland e seus pacotes
-pacman -S dolphin dunst grim hyprland kitty polkit-kde-agent qt5-wayland qt6-wayland slurp wofi xdg-desktop-portal-hyprland swaync polkit
-
-# Instala os drivers de video
-pacman -S intel-media-driver libva-intel-driver libva-mesa-driver mesa vulkan-intel vulkan-radeon xf86-video-amdgpu xf86-video-ati xf86-video-nouveau xf86-video-vmware xorg-server xorg-xinit
-
-# Instala o SDDM
-pacman -S sddm
-systemctl enable sddm
-
 # Finalização
 echo "Instalação concluída com sucesso!"
-echo "Partições montadas em /mnt. Para desmontar: umount -R /mnt"
+echo "Desmontando partições..."
+umount -R /mnt || echo "Aviso: Falha ao desmontar /mnt. Desmonte manualmente com 'umount -R /mnt'."
 echo "Para reiniciar: reboot"
