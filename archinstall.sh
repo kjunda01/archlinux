@@ -160,39 +160,42 @@ genfstab -U /mnt >> /mnt/etc/fstab || { echo "Erro ao gerar fstab"; umount -R /m
 echo "Configurando o sistema..."
 arch-chroot /mnt /bin/bash <<EOF
 # Configura o fuso horário
-ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
-hwclock --systohc
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime || { echo "Erro ao configurar fuso horário"; exit 1; }
+hwclock --systohc || { echo "Erro ao sincronizar relógio"; exit 1; }
 
 # Configura o idioma
-echo "$LANGUAGE UTF-8" > /etc/locale.gen
-locale-gen
-echo "LANG=$LANGUAGE" > /etc/locale.conf
+echo "$LANGUAGE UTF-8" > /etc/locale.gen || { echo "Erro ao configurar locale.gen"; exit 1; }
+locale-gen || { echo "Erro ao gerar locales"; exit 1; }
+echo "LANG=$LANGUAGE" > /etc/locale.conf || { echo "Erro ao configurar locale.conf"; exit 1; }
 
 # Configura o teclado
-echo "KEYMAP=$KEYBOARD" > /etc/vconsole.conf
+echo "KEYMAP=$KEYBOARD" > /etc/vconsole.conf || { echo "Erro ao configurar teclado"; exit 1; }
 
 # Configura o hostname
-echo "$HOSTNAME" > /etc/hostname
+echo "$HOSTNAME" > /etc/hostname || { echo "Erro ao configurar hostname"; exit 1; }
 cat <<HOSTS > /etc/hosts
 127.0.0.1   localhost
 ::1         localhost
 127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
 HOSTS
+[ \$? -ne 0 ] && { echo "Erro ao configurar /etc/hosts"; exit 1; }
 
 # Configura a senha do root
-echo "root:$ROOT_PASS" | chpasswd
+echo "root:$ROOT_PASS" | chpasswd || { echo "Erro ao configurar senha do root"; exit 1; }
 
 # Cria o usuário
-useradd -m -G wheel -s /bin/bash "$USER"
-echo "$USER:$USER_PASS" | chpasswd
+useradd -m -G wheel -s /bin/bash "$USER" || { echo "Erro ao criar usuário"; exit 1; }
+echo "$USER:$USER_PASS" | chpasswd || { echo "Erro ao configurar senha do usuário"; exit 1; }
 
 # Instala o GRUB e utilitários
-pacman -S --noconfirm grub efibootmgr
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-grub-mkconfig -o /boot/grub/grub.cfg
+pacman -S --noconfirm grub efibootmgr || { echo "Erro ao instalar GRUB"; exit 1; }
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB || { echo "Erro ao instalar GRUB"; exit 1; }
+grub-mkconfig -o /boot/grub/grub.cfg || { echo "Erro ao gerar configuração do GRUB"; exit 1; }
 
 # Habilita o usuário wheel para sudo (opcional)
-echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
+mkdir -p /etc/sudoers.d || { echo "Erro ao criar diretório /etc/sudoers.d"; exit 1; }
+echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel || { echo "Erro ao configurar sudoers.d/wheel"; exit 1; }
+chmod 440 /etc/sudoers.d/wheel || { echo "Erro ao definir permissões do sudoers.d/wheel"; exit 1; }
 
 exit
 EOF
